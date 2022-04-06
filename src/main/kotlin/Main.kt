@@ -64,7 +64,7 @@ fun main() {
                 json.decodeFromStream(input)
             }
 
-        val newReleasesAsync = async(Dispatchers.IO) { importNewReleases(client, knownData.releases + knownData.snapshots) }
+        val newReleasesAsync = async(Dispatchers.IO) { importNewReleases(client, knownData.releases, knownData.snapshots) }
         val snapshotsAsync = scanSnapshotsAsync(client, knownData.snapshots)
         val newReleases = newReleasesAsync.await()
         val allReleases = ArrayList<PublishedVersion>(knownData.releases.size + newReleases.size)

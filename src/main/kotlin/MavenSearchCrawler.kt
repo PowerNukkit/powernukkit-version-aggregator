@@ -41,14 +41,24 @@ suspend fun HttpClient.searchReleases(query: String): Response {
     return get(urlString = requestUrl)
 }
 
-suspend fun importNewReleases(client: HttpClient, existingReleases: List<PublishedVersion>): List<PublishedVersion> = coroutineScope {
+suspend fun importNewReleases(
+    client: HttpClient,
+    existingReleases: List<PublishedVersion>,
+    existingSnapshots: List<PublishedVersion>
+): List<PublishedVersion> = coroutineScope {
     val result = client.searchReleases("g:org.powernukkit+AND+a:powernukkit+AND+p:jar")
     check(result.responseHeader.status == 0)
-    importNewReleases(client, existingReleases, result.response).awaitAll()
+    importNewReleases(client, existingReleases, existingSnapshots, result.response).awaitAll() +
+            existingSnapshots.filter { it.snapshotBuild == null }
 }
 
-private fun CoroutineScope.importNewReleases(client: HttpClient, existingReleases: List<PublishedVersion>, result: ResponseBody): List<Deferred<PublishedVersion>> {
-    val skippedVersions = existingReleases.map { it.version }.toSet()
+private fun CoroutineScope.importNewReleases(
+    client: HttpClient,
+    existingReleases: List<PublishedVersion>,
+    existingSnapshots: List<PublishedVersion>,
+    result: ResponseBody
+): List<Deferred<PublishedVersion>> {
+    val skippedVersions = (existingReleases.map { it.version } + existingSnapshots.map { it.version }).toSet()
     val releases = result.releases.asSequence()
         .filter { it.version !in skippedVersions }
         //.take(1)
