@@ -26,10 +26,13 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.decodeFromStream
 import kotlinx.serialization.json.encodeToStream
+import org.powernukkit.version.Version
 import java.nio.file.Paths
+import java.time.Duration
 import kotlin.io.path.inputStream
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.outputStream
+import kotlin.math.abs
 
 fun main() {
     println("""
@@ -61,7 +64,7 @@ fun main() {
                 json.decodeFromStream(input)
             }
 
-        val newReleasesAsync = async(Dispatchers.IO) { importNewReleases(client, knownData.releases) }
+        val newReleasesAsync = async(Dispatchers.IO) { importNewReleases(client, knownData.releases + knownData.snapshots) }
         val snapshotsAsync = scanSnapshotsAsync(client, knownData.snapshots)
         val newReleases = newReleasesAsync.await()
         val allReleases = ArrayList<PublishedVersion>(knownData.releases.size + newReleases.size)
@@ -69,13 +72,58 @@ fun main() {
         allReleases += newReleases
         allReleases.sortDescending()
 
-        val updatedData = PowerNukkitVersions(allReleases, snapshotsAsync.await())
+        val testingNames = setOf("ALPHA", "BETA", "RC", "SNAPSHOT")
+        fun removeTestingToken(version: Version): Version {
+            val tokenIndex = version.parts.indexOfFirst { it is String && it.uppercase() in testingNames }
+            val token = version.parts[tokenIndex].toString()
+            val tokenPos = version.toString().indexOf(token, ignoreCase = true) - 1
+            return Version(version.toString().substring(0, tokenPos))
+        }
+
+        val testingReleases = allReleases.filter { r->
+            r.version.parts.any { it is String && it.uppercase() in testingNames }
+        }
+
+        allReleases -= testingReleases.toSet()
+
+        val numeralizer = Regex("\\D")
+        val snapshots = snapshotsAsync.await().toMutableList()
+        testingReleases.forEach { release ->
+            if (release !in snapshots) {
+                val closestSnapshot = snapshots.minByOrNull { snapshot ->
+                    val testingVersion = removeTestingToken(release.version)
+                    val snapshotVersion = removeTestingToken(snapshot.version)
+                    val snapshotVersionNumber = snapshotVersion.toString().replace(numeralizer, "").toInt()
+                    val testingVersionNumber = testingVersion.toString().replace(numeralizer, "").toInt()
+                    val versionComparison = abs(snapshotVersionNumber - testingVersionNumber)
+                    val timeComparison = Duration.between(snapshot.releaseTime, release.releaseTime).abs()
+                    TestingVersionComparison(versionComparison, timeComparison)
+                }
+                when {
+                    closestSnapshot == null -> snapshots += release
+                    closestSnapshot.releaseTime > release.releaseTime -> snapshots.add(snapshots.indexOf(closestSnapshot) + 1, release)
+                    else -> snapshots.add(snapshots.indexOf(closestSnapshot), release)
+                }
+            }
+        }
+
+        val updatedData = PowerNukkitVersions(allReleases, snapshots)
         file.outputStream().buffered().use { output ->
             @OptIn(ExperimentalSerializationApi::class)
             json.encodeToStream(updatedData, output)
         }
     }
     println("Success.")
+}
+
+data class TestingVersionComparison(
+    val versionComparison: Int,
+    val durationComparison: Duration,
+): Comparable<TestingVersionComparison> {
+    override fun compareTo(other: TestingVersionComparison): Int {
+        return compareBy(TestingVersionComparison::versionComparison, TestingVersionComparison::durationComparison)
+            .compare(this, other)
+    }
 }
 
 @Serializable
